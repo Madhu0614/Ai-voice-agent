@@ -1,21 +1,26 @@
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
-const ELEVEN_API_KEY = process.env.ELEVEN_API_KEY!;
+import { config } from './config';
 
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
+  if (!config.openai.apiKey) {
+    throw new Error('OpenAI API key is not configured. Please add OPENAI_API_KEY to your environment variables.');
+  }
+
   const formData = new FormData();
   formData.append('file', audioBlob, 'audio.wav');
   formData.append('model', 'whisper-1');
 
-  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+  const response = await fetch(`${config.openai.baseUrl}/audio/transcriptions`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${config.openai.apiKey}`,
     },
     body: formData,
   });
 
   if (!response.ok) {
-    throw new Error('Failed to transcribe audio');
+    const errorData = await response.json().catch(() => ({}));
+    console.error('Transcription error:', errorData);
+    throw new Error(`Failed to transcribe audio: ${response.status} ${response.statusText}`);
   }
 
   const data = await response.json();
@@ -30,6 +35,10 @@ export async function getChatResponse(
   hasClientReply?: boolean,
   clientReplyContent?: string
 ): Promise<string> {
+  if (!config.openai.apiKey) {
+    throw new Error('OpenAI API key is not configured. Please add OPENAI_API_KEY to your environment variables.');
+  }
+
   const clientReplyContext =
     hasClientReply && clientReplyContent
       ? `\n\nIMPORTANT: The client has already replied to your email with: "${clientReplyContent}". Reference this appropriately in your conversation.`
@@ -64,18 +73,18 @@ You are calling ${clientName} to build a relationship and understand their needs
 ✅ Show genuine interest in helping them succeed
 
 💬 SAMPLE QUESTIONS (CONVERSATIONAL TONE):
-- “I’d love to get a quick sense of what you guys do — what’s the main focus of your business?”
-- “Who are you typically trying to reach — any specific roles, industries, or company sizes?”
-- “Are you focused on any particular regions or markets at the moment?”
-- “How are you currently finding and reaching new leads?”
-- “What’s working well for you when it comes to outreach — and what’s been tricky?”
-- “Are you planning to expand into any new territories or verticals soon?”
-- “Do you build your own lead lists, or are you using outside tools or providers?”
-- “Do you mostly do cold calling, email outreach, or something else?”
+- "I'd love to get a quick sense of what you guys do — what's the main focus of your business?"
+- "Who are you typically trying to reach — any specific roles, industries, or company sizes?"
+- "Are you focused on any particular regions or markets at the moment?"
+- "How are you currently finding and reaching new leads?"
+- "What's working well for you when it comes to outreach — and what's been tricky?"
+- "Are you planning to expand into any new territories or verticals soon?"
+- "Do you build your own lead lists, or are you using outside tools or providers?"
+- "Do you mostly do cold calling, email outreach, or something else?"
 
 🧩 SOLUTION POSITIONING (only after discovery):
-Once you’ve learned about their needs:
-> “We help businesses like yours by providing accurate, targeted contact lists based on exactly who you want to reach — saving you time and improving results.”
+Once you've learned about their needs:
+> "We help businesses like yours by providing accurate, targeted contact lists based on exactly who you want to reach — saving you time and improving results."
 
 🤝 REMEMBER:
 This is relationship-building first, sales second. Your primary goal is to understand their target audience, geography, and outreach strategy — and position your solution only when it fits naturally.
@@ -83,11 +92,11 @@ This is relationship-building first, sales second. Your primary goal is to under
 ${clientReplyContext}
 `;
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch(`${config.openai.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${config.openai.apiKey}`,
     },
     body: JSON.stringify({
       model: 'gpt-4',
@@ -101,7 +110,9 @@ ${clientReplyContext}
   });
 
   if (!response.ok) {
-    throw new Error('Failed to get chat response');
+    const errorData = await response.json().catch(() => ({}));
+    console.error('Chat completion error:', errorData);
+    throw new Error(`Failed to get chat response: ${response.status} ${response.statusText}`);
   }
 
   const data = await response.json();
@@ -112,14 +123,18 @@ export async function synthesizeSpeech(
   text: string,
   voiceId: string = 'pNInz6obpgDQGcFmaJgB'
 ): Promise<ArrayBuffer> {
+  if (!config.elevenlabs.apiKey) {
+    throw new Error('ElevenLabs API key is not configured. Please add ELEVEN_API_KEY to your environment variables.');
+  }
+
   const response = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+    `${config.elevenlabs.baseUrl}/text-to-speech/${voiceId}`,
     {
       method: 'POST',
       headers: {
         Accept: 'audio/mpeg',
         'Content-Type': 'application/json',
-        'xi-api-key': ELEVEN_API_KEY,
+        'xi-api-key': config.elevenlabs.apiKey,
       },
       body: JSON.stringify({
         text,
@@ -135,7 +150,9 @@ export async function synthesizeSpeech(
   );
 
   if (!response.ok) {
-    throw new Error('Failed to synthesize speech');
+    const errorData = await response.json().catch(() => ({}));
+    console.error('Speech synthesis error:', errorData);
+    throw new Error(`Failed to synthesize speech: ${response.status} ${response.statusText}`);
   }
 
   return response.arrayBuffer();

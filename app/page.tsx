@@ -8,8 +8,10 @@ import { VoiceControls } from '@/components/voice-agent/voice-controls';
 import { CallMetrics } from '@/components/voice-agent/call-metrics';
 import { ErrorDisplay } from '@/components/voice-agent/error-display';
 import { EmailInput } from '@/components/voice-agent/email-input';
+import { ApiSetup } from '@/components/voice-agent/api-setup';
 import { AudioRecorder, AudioPlayer } from '@/lib/audio';
 import { transcribeAudio, getChatResponse, synthesizeSpeech } from '@/lib/apis';
+import { validateApiKeys } from '@/lib/config';
 import { Message, ConversationState } from '@/types/conversation';
 import { EmailData } from '@/lib/email-parser';
 import { Phone, PhoneOff, Target, MapPin, Users } from 'lucide-react';
@@ -27,11 +29,23 @@ export default function Home() {
   const [callStartTime, setCallStartTime] = useState<Date | null>(null);
   const [isCallActive, setIsCallActive] = useState(false);
   const [emailData, setEmailData] = useState<EmailData | null>(null);
+  const [apiKeysConfigured, setApiKeysConfigured] = useState(false);
 
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
   const audioPlayerRef = useRef<AudioPlayer | null>(null);
 
   useEffect(() => {
+    // Check if API keys are configured on mount
+    const result = validateApiKeys();
+    setApiKeysConfigured(result.isValid);
+
+    // Also check localStorage for demo purposes
+    const hasOpenAI = localStorage.getItem('OPENAI_API_KEY');
+    const hasElevenLabs = localStorage.getItem('ELEVEN_API_KEY');
+    if (hasOpenAI && hasElevenLabs) {
+      setApiKeysConfigured(true);
+    }
+
     audioRecorderRef.current = new AudioRecorder();
     audioPlayerRef.current = new AudioPlayer();
 
@@ -39,6 +53,10 @@ export default function Home() {
       audioPlayerRef.current?.cleanup();
     };
   }, []);
+
+  const handleApiKeysConfigured = () => {
+    setApiKeysConfigured(true);
+  };
 
   const handleEmailParsed = (data: EmailData) => {
     setEmailData(data);
@@ -89,6 +107,22 @@ export default function Home() {
         isRecording: false, 
         isProcessing: true 
       }));
+
+      // Get API keys from localStorage for demo
+      const openaiKey = localStorage.getItem('OPENAI_API_KEY');
+      const elevenlabsKey = localStorage.getItem('ELEVEN_API_KEY');
+
+      if (!openaiKey || !elevenlabsKey) {
+        throw new Error('API keys not configured. Please configure your API keys first.');
+      }
+
+      // Temporarily set the keys for the API calls
+      const originalOpenAI = process.env.OPENAI_API_KEY;
+      const originalElevenLabs = process.env.ELEVEN_API_KEY;
+      
+      // For demo purposes, we'll modify the config temporarily
+      (window as any).DEMO_OPENAI_KEY = openaiKey;
+      (window as any).DEMO_ELEVEN_KEY = elevenlabsKey;
 
       // Transcribe audio
       const transcription = await transcribeAudio(audioBlob);
@@ -165,7 +199,28 @@ export default function Home() {
     setConversationState(prev => ({ ...prev, error: null }));
   };
 
-  const canStartCall = emailData?.salespersonName && emailData?.clientName;
+  const canStartCall = emailData?.salespersonName && emailData?.clientName && apiKeysConfigured;
+
+  // Show API setup if keys are not configured
+  if (!apiKeysConfigured) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-teal-50 dark:from-slate-900 dark:via-blue-900 dark:to-teal-900">
+        <div className="container mx-auto p-6 max-w-4xl">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-teal-600 bg-clip-text text-transparent mb-2">
+              Strategic Cold Call Voice Agent
+            </h1>
+            <p className="text-lg text-muted-foreground">
+              AI-powered relationship-building conversations focused on discovering target audience and location
+            </p>
+          </div>
+
+          <ApiSetup onApiKeysConfigured={handleApiKeysConfigured} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-teal-50 dark:from-slate-900 dark:via-blue-900 dark:to-teal-900">
