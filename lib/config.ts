@@ -39,11 +39,3 @@ export function validateApiKeys(): { isValid: boolean; missingKeys: string[] } {
     missingKeys,
   };
 }
-
-// Function to clear localStorage API keys (useful for debugging)
-export function clearStoredApiKeys(): void {
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem('OPENAI_API_KEY');
-    localStorage.removeItem('ELEVEN_API_KEY');
-  }
-}

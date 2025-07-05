@@ -8,7 +8,6 @@ import { VoiceControls } from '@/components/voice-agent/voice-controls';
 import { CallMetrics } from '@/components/voice-agent/call-metrics';
 import { ErrorDisplay } from '@/components/voice-agent/error-display';
 import { EmailInput } from '@/components/voice-agent/email-input';
-import { ApiSetup } from '@/components/voice-agent/api-setup';
 import { AudioRecorder, AudioPlayer } from '@/lib/audio';
 import { transcribeAudio, getChatResponse, synthesizeSpeech } from '@/lib/apis';
 import { validateApiKeys } from '@/lib/config';
@@ -29,7 +28,6 @@ export default function Home() {
   const [callStartTime, setCallStartTime] = useState<Date | null>(null);
   const [isCallActive, setIsCallActive] = useState(false);
   const [emailData, setEmailData] = useState<EmailData | null>(null);
-  const [apiKeysConfigured, setApiKeysConfigured] = useState(false);
   const [isClient, setIsClient] = useState(false);
 
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
@@ -43,18 +41,10 @@ export default function Home() {
     audioRecorderRef.current = new AudioRecorder();
     audioPlayerRef.current = new AudioPlayer();
 
-    // Check if API keys are configured
-    const result = validateApiKeys();
-    setApiKeysConfigured(result.isValid);
-
     return () => {
       audioPlayerRef.current?.cleanup();
     };
   }, []);
-
-  const handleApiKeysConfigured = () => {
-    setApiKeysConfigured(true);
-  };
 
   const handleEmailParsed = (data: EmailData) => {
     setEmailData(data);
@@ -187,32 +177,11 @@ export default function Home() {
     setConversationState(prev => ({ ...prev, error: null }));
   };
 
-  const canStartCall = emailData?.salespersonName && emailData?.clientName && apiKeysConfigured;
+  const canStartCall = emailData?.salespersonName && emailData?.clientName;
 
   // Prevent hydration mismatch by not rendering until client-side
   if (!isClient) {
     return null;
-  }
-
-  // Show API setup if keys are not configured
-  if (!apiKeysConfigured) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-teal-50 dark:from-slate-900 dark:via-blue-900 dark:to-teal-900">
-        <div className="container mx-auto p-6 max-w-4xl">
-          {/* Header */}
-          <div className="text-center mb-8">
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-teal-600 bg-clip-text text-transparent mb-2">
-              Strategic Cold Call Voice Agent
-            </h1>
-            <p className="text-lg text-muted-foreground">
-              AI-powered relationship-building conversations focused on discovering target audience and location
-            </p>
-          </div>
-
-          <ApiSetup onApiKeysConfigured={handleApiKeysConfigured} />
-        </div>
-      </div>
-    );
   }
 
   return (
