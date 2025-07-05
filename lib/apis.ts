@@ -1,8 +1,10 @@
-import { config } from './config';
+import { config, getActiveApiKey } from './config';
 
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
-  if (!config.openai.apiKey) {
-    throw new Error('OpenAI API key is not configured. Please add OPENAI_API_KEY to your environment variables.');
+  const apiKey = getActiveApiKey('openai');
+  
+  if (!apiKey) {
+    throw new Error('OpenAI API key is not configured. Please add NEXT_PUBLIC_OPENAI_API_KEY to your environment variables or configure it in the API setup.');
   }
 
   const formData = new FormData();
@@ -12,7 +14,7 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   const response = await fetch(`${config.openai.baseUrl}/audio/transcriptions`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${config.openai.apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: formData,
   });
@@ -35,8 +37,10 @@ export async function getChatResponse(
   hasClientReply?: boolean,
   clientReplyContent?: string
 ): Promise<string> {
-  if (!config.openai.apiKey) {
-    throw new Error('OpenAI API key is not configured. Please add OPENAI_API_KEY to your environment variables.');
+  const apiKey = getActiveApiKey('openai');
+  
+  if (!apiKey) {
+    throw new Error('OpenAI API key is not configured. Please add NEXT_PUBLIC_OPENAI_API_KEY to your environment variables or configure it in the API setup.');
   }
 
   const clientReplyContext =
@@ -96,7 +100,7 @@ ${clientReplyContext}
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.openai.apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: 'gpt-4',
@@ -123,9 +127,14 @@ export async function synthesizeSpeech(
   text: string,
   voiceId: string = 'pNInz6obpgDQGcFmaJgB'
 ): Promise<ArrayBuffer> {
-  if (!config.elevenlabs.apiKey) {
-    throw new Error('ElevenLabs API key is not configured. Please add ELEVEN_API_KEY to your environment variables.');
+  const apiKey = getActiveApiKey('elevenlabs');
+  
+  if (!apiKey) {
+    throw new Error('ElevenLabs API key is not configured. Please add NEXT_PUBLIC_ELEVEN_API_KEY to your environment variables or configure it in the API setup.');
   }
+
+  // Log the API key being used for debugging (first 10 characters only)
+  console.log('Using ElevenLabs API key:', apiKey.substring(0, 10) + '...');
 
   const response = await fetch(
     `${config.elevenlabs.baseUrl}/text-to-speech/${voiceId}`,
@@ -134,7 +143,7 @@ export async function synthesizeSpeech(
       headers: {
         Accept: 'audio/mpeg',
         'Content-Type': 'application/json',
-        'xi-api-key': config.elevenlabs.apiKey,
+        'xi-api-key': apiKey,
       },
       body: JSON.stringify({
         text,
@@ -152,6 +161,12 @@ export async function synthesizeSpeech(
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     console.error('Speech synthesis error:', errorData);
+    
+    // Provide more specific error messages
+    if (response.status === 401 || (errorData.detail && errorData.detail.status === 'invalid_api_key')) {
+      throw new Error('Invalid ElevenLabs API key. Please check your API key and try again. You can clear stored keys and reconfigure them in the API setup.');
+    }
+    
     throw new Error(`Failed to synthesize speech: ${response.status} ${response.statusText}`);
   }
 
