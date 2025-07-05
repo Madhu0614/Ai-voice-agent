@@ -10,6 +10,8 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   const formData = new FormData();
   formData.append('file', audioBlob, 'audio.wav');
   formData.append('model', 'whisper-1');
+  formData.append('language', 'en'); // Specify language for faster processing
+  formData.append('temperature', '0'); // Lower temperature for more consistent results
 
   const response = await fetch(`${config.openai.baseUrl}/audio/transcriptions`, {
     method: 'POST',
@@ -72,9 +74,10 @@ You are calling ${clientName} to build a relationship and understand their needs
 🧠 CONVERSATIONAL STYLE:
 ✅ Be helpful, not salesy  
 ✅ Ask thoughtful, natural questions  
-✅ Keep responses short (2–3 sentences max)  
+✅ Keep responses SHORT (1-2 sentences max for natural flow)
 ✅ Maintain a warm, professional tone  
 ✅ Show genuine interest in helping them succeed
+✅ Respond quickly and naturally like a real conversation
 
 💬 SAMPLE QUESTIONS (CONVERSATIONAL TONE):
 - "I'd love to get a quick sense of what you guys do — what's the main focus of your business?"
@@ -93,6 +96,8 @@ Once you've learned about their needs:
 🤝 REMEMBER:
 This is relationship-building first, sales second. Your primary goal is to understand their target audience, geography, and outreach strategy — and position your solution only when it fits naturally.
 
+CRITICAL: Keep responses SHORT and CONVERSATIONAL. This is a real-time conversation, not an email.
+
 ${clientReplyContext}
 `;
 
@@ -103,13 +108,14 @@ ${clientReplyContext}
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4',
+      model: 'gpt-4o-mini', // Faster model for real-time conversation
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages,
       ],
-      max_tokens: 150,
-      temperature: 0.7,
+      max_tokens: 80, // Shorter responses for natural conversation
+      temperature: 0.8, // More natural variation
+      stream: false, // We could implement streaming later for even faster responses
     }),
   });
 
@@ -133,9 +139,6 @@ export async function synthesizeSpeech(
     throw new Error('ElevenLabs API key is not configured. Please add NEXT_PUBLIC_ELEVEN_API_KEY to your environment variables or configure it in the API setup.');
   }
 
-  // Log the API key being used for debugging (first 10 characters only)
-  console.log('Using ElevenLabs API key:', apiKey.substring(0, 10) + '...');
-
   const response = await fetch(
     `${config.elevenlabs.baseUrl}/text-to-speech/${voiceId}`,
     {
@@ -147,13 +150,14 @@ export async function synthesizeSpeech(
       },
       body: JSON.stringify({
         text,
-        model_id: 'eleven_monolingual_v1',
+        model_id: 'eleven_turbo_v2', // Faster model for real-time conversation
         voice_settings: {
-          stability: 0.5,
+          stability: 0.6,
           similarity_boost: 0.8,
-          style: 0.2,
+          style: 0.3,
           use_speaker_boost: true,
         },
+        optimize_streaming_latency: 3, // Optimize for low latency
       }),
     }
   );
@@ -162,9 +166,8 @@ export async function synthesizeSpeech(
     const errorData = await response.json().catch(() => ({}));
     console.error('Speech synthesis error:', errorData);
     
-    // Provide more specific error messages
     if (response.status === 401 || (errorData.detail && errorData.detail.status === 'invalid_api_key')) {
-      throw new Error('Invalid ElevenLabs API key. Please check your API key and try again. You can clear stored keys and reconfigure them in the API setup.');
+      throw new Error('Invalid ElevenLabs API key. Please check your API key and try again.');
     }
     
     throw new Error(`Failed to synthesize speech: ${response.status} ${response.statusText}`);

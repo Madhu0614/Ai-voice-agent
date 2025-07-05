@@ -13,7 +13,7 @@ import { transcribeAudio, getChatResponse, synthesizeSpeech } from '@/lib/apis';
 import { validateApiKeys } from '@/lib/config';
 import { Message, ConversationState } from '@/types/conversation';
 import { EmailData } from '@/lib/email-parser';
-import { Phone, PhoneOff, Target, MapPin, Users } from 'lucide-react';
+import { Phone, PhoneOff, Target, MapPin, Users, Mic, MicOff } from 'lucide-react';
 
 export default function Home() {
   const [conversationState, setConversationState] = useState<ConversationState>({
@@ -29,20 +29,23 @@ export default function Home() {
   const [isCallActive, setIsCallActive] = useState(false);
   const [emailData, setEmailData] = useState<EmailData | null>(null);
   const [isClient, setIsClient] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [currentVolume, setCurrentVolume] = useState(0);
 
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
   const audioPlayerRef = useRef<AudioPlayer | null>(null);
+  const volumeMonitorRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // Set client flag to prevent hydration mismatch
     setIsClient(true);
-
-    // Initialize audio components
     audioRecorderRef.current = new AudioRecorder();
     audioPlayerRef.current = new AudioPlayer();
 
     return () => {
       audioPlayerRef.current?.cleanup();
+      if (volumeMonitorRef.current) {
+        cancelAnimationFrame(volumeMonitorRef.current);
+      }
     };
   }, []);
 
@@ -58,12 +61,22 @@ export default function Home() {
       messages: [],
       error: null,
     }));
+    
+    // Start continuous listening
+    startContinuousListening();
   };
 
   const endCall = () => {
     setIsCallActive(false);
     setCallStartTime(null);
+    setIsListening(false);
     audioPlayerRef.current?.stopAudio();
+    audioRecorderRef.current?.stopRecording().catch(() => {});
+    
+    if (volumeMonitorRef.current) {
+      cancelAnimationFrame(volumeMonitorRef.current);
+    }
+    
     setConversationState(prev => ({
       ...prev,
       isRecording: false,
@@ -72,39 +85,92 @@ export default function Home() {
     }));
   };
 
-  const handleStartRecording = async () => {
+  const startContinuousListening = async () => {
     try {
       setConversationState(prev => ({ ...prev, error: null }));
-      await audioRecorderRef.current?.startRecording();
+      
+      const validation = validateApiKeys();
+      if (!validation.isValid) {
+        throw new Error(`API keys not configured: ${validation.missingKeys.join(', ')}`);
+      }
+
+      setIsListening(true);
       setConversationState(prev => ({ ...prev, isRecording: true }));
+
+      await audioRecorderRef.current?.startRecording({
+        onSilenceDetected: handleSilenceDetected,
+        onSpeechDetected: handleSpeechDetected,
+        silenceTimeout: 2000, // 2 seconds of silence
+      });
+
+      // Start volume monitoring
+      monitorVolume();
+
     } catch (error) {
+      setIsListening(false);
       setConversationState(prev => ({
         ...prev,
-        error: error instanceof Error ? error.message : 'Failed to start recording',
+        isRecording: false,
+        error: error instanceof Error ? error.message : 'Failed to start listening',
       }));
     }
   };
 
-  const handleStopRecording = async () => {
-    try {
-      if (!audioRecorderRef.current) return;
+  const monitorVolume = () => {
+    const updateVolume = () => {
+      if (audioRecorderRef.current && isListening) {
+        const volume = audioRecorderRef.current.getCurrentVolume();
+        setCurrentVolume(volume);
+        volumeMonitorRef.current = requestAnimationFrame(updateVolume);
+      }
+    };
+    updateVolume();
+  };
 
-      const audioBlob = await audioRecorderRef.current.stopRecording();
+  const handleSilenceDetected = async () => {
+    if (!isListening || conversationState.isProcessing) return;
+
+    try {
+      const audioBlob = await audioRecorderRef.current?.stopRecording();
+      if (!audioBlob || audioBlob.size < 1000) {
+        // Audio too short, restart listening
+        restartListening();
+        return;
+      }
+
       setConversationState(prev => ({ 
         ...prev, 
         isRecording: false, 
         isProcessing: true 
       }));
 
-      // Validate API keys are available
-      const validation = validateApiKeys();
-      if (!validation.isValid) {
-        throw new Error(`API keys not configured: ${validation.missingKeys.join(', ')}`);
-      }
+      // Process the audio
+      await processAudioMessage(audioBlob);
 
+    } catch (error) {
+      console.error('Error processing silence detection:', error);
+      restartListening();
+    }
+  };
+
+  const handleSpeechDetected = () => {
+    // Stop any current playback when user starts speaking
+    if (audioPlayerRef.current?.isCurrentlyPlaying()) {
+      audioPlayerRef.current.stopAudio();
+      setConversationState(prev => ({ ...prev, isPlaying: false }));
+    }
+  };
+
+  const processAudioMessage = async (audioBlob: Blob) => {
+    try {
       // Transcribe audio
       const transcription = await transcribeAudio(audioBlob);
       
+      if (!transcription.trim()) {
+        restartListening();
+        return;
+      }
+
       // Add user message
       const userMessage: Message = {
         id: Date.now().toString(),
@@ -118,7 +184,7 @@ export default function Home() {
         messages: [...prev.messages, userMessage],
       }));
 
-      // Get chat response with enhanced context
+      // Get chat response
       const chatHistory = [
         ...conversationState.messages.map(msg => ({
           role: msg.type === 'user' ? 'user' : 'assistant',
@@ -153,24 +219,63 @@ export default function Home() {
 
       // Convert to speech and play
       const audioBuffer = await synthesizeSpeech(agentResponse);
-      await audioPlayerRef.current?.playAudio(audioBuffer);
-
-      setConversationState(prev => ({ ...prev, isPlaying: false }));
+      
+      await audioPlayerRef.current?.playAudio(audioBuffer, {
+        onPlaybackEnd: () => {
+          setConversationState(prev => ({ ...prev, isPlaying: false }));
+          // Restart listening after agent finishes speaking
+          if (isCallActive) {
+            setTimeout(() => restartListening(), 500);
+          }
+        }
+      });
 
     } catch (error) {
       setConversationState(prev => ({
         ...prev,
-        isRecording: false,
         isProcessing: false,
         isPlaying: false,
         error: error instanceof Error ? error.message : 'An error occurred',
       }));
+      
+      // Restart listening even after error
+      if (isCallActive) {
+        setTimeout(() => restartListening(), 2000);
+      }
     }
   };
 
-  const handleStopPlayback = () => {
-    audioPlayerRef.current?.stopAudio();
-    setConversationState(prev => ({ ...prev, isPlaying: false }));
+  const restartListening = async () => {
+    if (!isCallActive) return;
+    
+    try {
+      setConversationState(prev => ({ ...prev, isRecording: true }));
+      
+      await audioRecorderRef.current?.startRecording({
+        onSilenceDetected: handleSilenceDetected,
+        onSpeechDetected: handleSpeechDetected,
+        silenceTimeout: 2000,
+      });
+    } catch (error) {
+      console.error('Error restarting listening:', error);
+      setConversationState(prev => ({
+        ...prev,
+        isRecording: false,
+        error: 'Failed to restart listening',
+      }));
+    }
+  };
+
+  const handleManualStop = () => {
+    if (audioPlayerRef.current?.isCurrentlyPlaying()) {
+      audioPlayerRef.current.stopAudio();
+      setConversationState(prev => ({ ...prev, isPlaying: false }));
+      
+      // Restart listening after stopping playback
+      if (isCallActive) {
+        setTimeout(() => restartListening(), 500);
+      }
+    }
   };
 
   const handleDismissError = () => {
@@ -179,7 +284,6 @@ export default function Home() {
 
   const canStartCall = emailData?.salespersonName && emailData?.clientName;
 
-  // Prevent hydration mismatch by not rendering until client-side
   if (!isClient) {
     return null;
   }
@@ -190,10 +294,10 @@ export default function Home() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-teal-600 bg-clip-text text-transparent mb-2">
-            Strategic Cold Call Voice Agent
+            Real-Time Voice Agent
           </h1>
           <p className="text-lg text-muted-foreground">
-            AI-powered relationship-building conversations focused on discovering target audience and location
+            AI-powered natural conversations with automatic speech detection and interruption handling
           </p>
         </div>
 
@@ -221,7 +325,7 @@ export default function Home() {
                     className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50"
                   >
                     <Phone className="h-4 w-4 mr-2" />
-                    Start Strategic Call
+                    Start Real-Time Call
                   </Button>
                 ) : (
                   <Button
@@ -234,13 +338,39 @@ export default function Home() {
                 )}
               </div>
             </CardTitle>
-            <CardDescription>
-              {!canStartCall 
-                ? 'Configure your email details first to personalize the conversation'
-                : isCallActive 
-                  ? `Active call: ${emailData?.salespersonName} → ${emailData?.clientName}` 
-                  : `Ready to call ${emailData?.clientName} as ${emailData?.salespersonName}`
-              }
+            <CardDescription className="flex items-center gap-4">
+              <span>
+                {!canStartCall 
+                  ? 'Configure your email details first to personalize the conversation'
+                  : isCallActive 
+                    ? `Active call: ${emailData?.salespersonName} → ${emailData?.clientName}` 
+                    : `Ready to call ${emailData?.clientName} as ${emailData?.salespersonName}`
+                }
+              </span>
+              
+              {isCallActive && (
+                <div className="flex items-center gap-2">
+                  {isListening ? (
+                    <div className="flex items-center gap-2 text-green-600">
+                      <Mic className="h-4 w-4" />
+                      <span className="text-sm">Listening</span>
+                      <div 
+                        className="w-8 h-2 bg-green-200 rounded-full overflow-hidden"
+                      >
+                        <div 
+                          className="h-full bg-green-500 transition-all duration-100"
+                          style={{ width: `${Math.min(100, (currentVolume / 50) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-gray-500">
+                      <MicOff className="h-4 w-4" />
+                      <span className="text-sm">Not listening</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </CardDescription>
           </CardHeader>
         </Card>
@@ -269,14 +399,45 @@ export default function Home() {
 
             {/* Voice Controls & Context */}
             <div className="space-y-4">
-              <VoiceControls
-                isRecording={conversationState.isRecording}
-                isProcessing={conversationState.isProcessing}
-                isPlaying={conversationState.isPlaying}
-                onStartRecording={handleStartRecording}
-                onStopRecording={handleStopRecording}
-                onStopPlayback={handleStopPlayback}
-              />
+              {/* Real-time Status */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Real-Time Status</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Listening:</span>
+                    <span className={`text-sm font-medium ${isListening ? 'text-green-600' : 'text-gray-500'}`}>
+                      {isListening ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Processing:</span>
+                    <span className={`text-sm font-medium ${conversationState.isProcessing ? 'text-blue-600' : 'text-gray-500'}`}>
+                      {conversationState.isProcessing ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Speaking:</span>
+                    <span className={`text-sm font-medium ${conversationState.isPlaying ? 'text-purple-600' : 'text-gray-500'}`}>
+                      {conversationState.isPlaying ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+
+                  {conversationState.isPlaying && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleManualStop}
+                      className="w-full"
+                    >
+                      Stop Agent & Resume Listening
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
 
               {/* Call Context */}
               {emailData && (
@@ -340,17 +501,17 @@ export default function Home() {
                 </CardContent>
               </Card>
 
-              {/* Conversation Tips */}
+              {/* Real-time Tips */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Conversation Tips</CardTitle>
+                  <CardTitle className="text-base">Real-Time Features</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm text-muted-foreground">
-                  <p>• Start with warm greeting and email reference</p>
-                  <p>• Ask about their business naturally</p>
-                  <p>• Focus on understanding their market</p>
-                  <p>• Build rapport before pitching solutions</p>
-                  <p>• Listen actively and show genuine interest</p>
+                  <p>• Automatic speech detection - just start talking</p>
+                  <p>• Interrupt the agent anytime by speaking</p>
+                  <p>• 2-second silence triggers response</p>
+                  <p>• Optimized for natural conversation flow</p>
+                  <p>• Real-time volume monitoring</p>
                 </CardContent>
               </Card>
             </div>
@@ -360,12 +521,12 @@ export default function Home() {
             <CardContent>
               <Phone className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
               <h3 className="text-xl font-semibold mb-2">
-                {canStartCall ? 'Ready for Strategic Cold Call' : 'Configure Your Cold Call'}
+                {canStartCall ? 'Ready for Real-Time Call' : 'Configure Your Call'}
               </h3>
               <p className="text-muted-foreground mb-6 max-w-md mx-auto">
                 {canStartCall 
-                  ? `Start your strategic call as ${emailData?.salespersonName} to ${emailData?.clientName}. Focus on building rapport and discovering their target audience and market.`
-                  : 'Configure your email details above to create a personalized conversation experience with strategic goals.'
+                  ? `Start your real-time call as ${emailData?.salespersonName} to ${emailData?.clientName}. The conversation will flow naturally with automatic speech detection.`
+                  : 'Configure your email details above to create a personalized conversation experience with real-time voice interaction.'
                 }
               </p>
               {canStartCall && (
@@ -375,7 +536,7 @@ export default function Home() {
                   className="bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-700 hover:to-teal-700 text-white"
                 >
                   <Phone className="h-5 w-5 mr-2" />
-                  Start Strategic Call
+                  Start Real-Time Call
                 </Button>
               )}
             </CardContent>
@@ -385,6 +546,7 @@ export default function Home() {
         {/* Footer */}
         <div className="mt-12 text-center text-sm text-muted-foreground">
           <p>Powered by OpenAI GPT-4, Whisper API, and ElevenLabs Voice Synthesis</p>
+          <p className="mt-1">Real-time conversation with automatic speech detection and interruption handling</p>
         </div>
       </div>
     </div>
