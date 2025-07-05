@@ -30,24 +30,22 @@ export default function Home() {
   const [isCallActive, setIsCallActive] = useState(false);
   const [emailData, setEmailData] = useState<EmailData | null>(null);
   const [apiKeysConfigured, setApiKeysConfigured] = useState(false);
+  const [isClient, setIsClient] = useState(false);
 
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
   const audioPlayerRef = useRef<AudioPlayer | null>(null);
 
   useEffect(() => {
-    // Check if API keys are configured on mount
-    const result = validateApiKeys();
-    setApiKeysConfigured(result.isValid);
+    // Set client flag to prevent hydration mismatch
+    setIsClient(true);
 
-    // Also check localStorage for demo purposes
-    const hasOpenAI = localStorage.getItem('OPENAI_API_KEY');
-    const hasElevenLabs = localStorage.getItem('ELEVEN_API_KEY');
-    if (hasOpenAI && hasElevenLabs) {
-      setApiKeysConfigured(true);
-    }
-
+    // Initialize audio components
     audioRecorderRef.current = new AudioRecorder();
     audioPlayerRef.current = new AudioPlayer();
+
+    // Check if API keys are configured
+    const result = validateApiKeys();
+    setApiKeysConfigured(result.isValid);
 
     return () => {
       audioPlayerRef.current?.cleanup();
@@ -108,21 +106,11 @@ export default function Home() {
         isProcessing: true 
       }));
 
-      // Get API keys from localStorage for demo
-      const openaiKey = localStorage.getItem('OPENAI_API_KEY');
-      const elevenlabsKey = localStorage.getItem('ELEVEN_API_KEY');
-
-      if (!openaiKey || !elevenlabsKey) {
-        throw new Error('API keys not configured. Please configure your API keys first.');
+      // Validate API keys are available
+      const validation = validateApiKeys();
+      if (!validation.isValid) {
+        throw new Error(`API keys not configured: ${validation.missingKeys.join(', ')}`);
       }
-
-      // Temporarily set the keys for the API calls
-      const originalOpenAI = process.env.OPENAI_API_KEY;
-      const originalElevenLabs = process.env.ELEVEN_API_KEY;
-      
-      // For demo purposes, we'll modify the config temporarily
-      (window as any).DEMO_OPENAI_KEY = openaiKey;
-      (window as any).DEMO_ELEVEN_KEY = elevenlabsKey;
 
       // Transcribe audio
       const transcription = await transcribeAudio(audioBlob);
@@ -200,6 +188,11 @@ export default function Home() {
   };
 
   const canStartCall = emailData?.salespersonName && emailData?.clientName && apiKeysConfigured;
+
+  // Prevent hydration mismatch by not rendering until client-side
+  if (!isClient) {
+    return null;
+  }
 
   // Show API setup if keys are not configured
   if (!apiKeysConfigured) {
